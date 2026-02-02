@@ -61,11 +61,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                          <h2 class="mb-3 text-danger">送信エラー</h2>
                          <p class="text-muted mb-4">申し訳ありません。送信中にエラーが発生しました。</p>
                     <?php endif; ?>
-                    <a href="index.html" class="btn btn-primary w-100">トップページに戻る</a>
+                    <a href="index.php" class="btn btn-primary w-100">トップページに戻る</a>
                 </div>
             </div>
         </div>
     </div>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </body>
+
 </html>
