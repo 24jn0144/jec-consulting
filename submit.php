@@ -61,7 +61,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                          <h2 class="mb-3 text-danger">送信エラー</h2>
                          <p class="text-muted mb-4">申し訳ありません。送信中にエラーが発生しました。</p>
                     <?php endif; ?>
-                    <a href="index.php" class="btn btn-primary w-100">トップページに戻る</a>
+                    <a href="website.php" class="btn btn-primary w-100">トップページに戻る</a>
                 </div>
             </div>
         </div>
@@ -70,3 +70,4 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 </body>
 
 </html>
+
