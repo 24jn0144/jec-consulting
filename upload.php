@@ -154,37 +154,34 @@ function parseFamilyMartReceipt($ocrResult) {
     foreach ($lines as $line) {
         $text = $line['text'];
         
-        // ファミリーマートのレシート解析ロジック
-        
-        // 1. 合計金額の抽出 ("合 計" や "合計" を含む行)
-        if (preg_match('/合\s*計/u', $text)) {
-            // 数字だけ抜き出す (カンマ除去)
-            if (preg_match('/([0-9,]+)/', $text, $matches)) {
+        // --- 1. 不要な文字の除去 ---
+        // 「軽」や「*」、「(」、「)」などを完全に削除
+        $cleanText = str_replace(['軽', '*', '＊', '(', ')', '（', '）'], '', $text);
+        // 行末や行頭の余計な空白を削除
+        $cleanText = trim($cleanText);
+
+        // --- 2. 合計金額の抽出 ---
+        if (preg_match('/合計/u', $cleanText)) {
+            if (preg_match('/([0-9,]+)/', $cleanText, $matches)) {
                 $total = (int)str_replace(',', '', $matches[1]);
             }
-            continue; // 合計行は商品リストに入れない
+            continue; 
         }
 
-        // 2. 商品の抽出
-        // 除外ワード（レシートのヘッダーやフッター）
-        if (preg_match('/(電話|登録番号|日時|レジ|領収証|対象|支払|残高|お釣り|ファミ|クーポン)/u', $text)) {
+        // --- 3. 商品名の抽出ロジック（除外設定） ---
+        if (preg_match('/(電話|登録番号|日時|レジ|領収証|対象|支払|残高|お釣り|ファミ|クーポン|％|個)/u', $cleanText)) {
             continue;
         }
 
-        // 価格が含まれているかチェック ("¥" または 数字+軽 など)
-        // 商品名は左側、価格は右側にあることが多いが、OCRでは1行で取れることが多い
-        // パターン: [商品名] [価格][軽?]
-        // 例: "ザバスプロテインフルー ¥247軽"
-        
-        if (preg_match('/(.*?)\s*¥?([0-9,]+)(軽)?$/u', $text, $matches)) {
+        // --- 4. 商品名と金額の分離 ---
+        // パターン: [商品名] [金額] (金額の前に¥があってもなくても対応)
+        // 例: "ザバスプロテインフルー ¥247" や "◎天然水新潟県津南６０ 108"
+        if (preg_match('/^(.+?)\s*¥?([0-9,]+)$/u', $cleanText, $matches)) {
             $name = trim($matches[1]);
-            $priceStr = str_replace(',', '', $matches[2]);
-            $price = (int)$priceStr;
+            $price = (int)str_replace(',', '', $matches[2]);
 
-            // 商品名が空、または数字だけの行は除外
-            if (empty($name) || is_numeric($name)) continue;
-            // 記号だけのゴミ除外
-            if (mb_strlen($name) < 2) continue;
+            // 商品名が数字だけ、または1文字以下のゴミデータは除外
+            if (is_numeric($name) || mb_strlen($name) <= 1) continue;
 
             $items[] = ['name' => $name, 'price' => $price];
         }
@@ -192,7 +189,6 @@ function parseFamilyMartReceipt($ocrResult) {
 
     return ['items' => $items, 'total' => $total];
 }
-?>
 
 <!DOCTYPE html>
 <html lang="ja">
@@ -237,4 +233,5 @@ function parseFamilyMartReceipt($ocrResult) {
         </div>
     </div>
 </body>
+
 </html>
