@@ -87,38 +87,38 @@ function parseFamilyMartReceipt($ocrResult) {
     foreach ($lines as $line) {
         $text = trim($line['text']);
 
-        // --- 強力な除外リスト ---
-        // 店名、日時(2024年..)、領収、レジ、支払方法、残高、住所、電話番号、英字ゴミを排除
-        if (preg_match('/(FamilyMart|年|月|日|:[0-9]{2}|領収|店|責No|番号|レジ|電話|T[0-9]{10}|お買上|証|マネー|支払|残高|クレジット|現金|お釣り|対象|消費税|thefamhay)/ui', $text)) {
+        // 1. 強力なゴミ排除（これらが含まれる行は「商品名」として蓄積しない）
+        if (preg_match('/(東京都|新宿区|北新宿|FamilyMart|年|月|日|:[0-9]{2}|領収|店|責No|番号|レジ|電話|T[0-9]{10}|お買上|証|マネー|支払|残高|クレジット|現金|お釣り|対象|消費税|thefamhay)/ui', $text)) {
+            $currentName = ""; // ゴミが出たら、それまで溜めてた文字列もリセット
             continue;
         }
 
-        // --- 合計金額の抽出 ---
-        // 「合計」という文字が含まれる行から数字を抜く
+        // 2. 合計金額の抽出
         if (mb_strpos($text, '合計') !== false || mb_strpos($text, '合 計') !== false) {
-            if (preg_match('/([0-9,]+)/', $text, $m)) {
+            if (preg_match('/([0-9,]{3,})/', $text, $m)) { // 3桁以上の数字を合計とみなす
                 $total = (int)str_replace(',', '', $m[1]);
             }
             continue;
         }
 
-        // --- 商品名と価格の検知 ---
-        // 「¥」や「*」がある、または行末が数字（価格）のパターン
-        if (preg_match('/[\*¥]\s*([0-9,]+)/', $text, $m) || preg_match('/\s+([0-9,]+)$/', $text, $m)) {
+        // 3. 商品名と価格の検知
+        // 「¥」や「*」がある行を価格行とする
+        if (preg_match('/[\*¥]\s*([0-9,]+)/', $text, $m)) {
             $price = (int)str_replace(',', '', $m[1]);
             
-            // 商品名のクレンジング
+            // 商品名の最終クレンジング
             $name = str_replace(['(軽)', '軽', '*', '¥', '＊', '(', ')', '（', '）'], '', $currentName);
             $name = trim($name);
 
-            // 商品名が2文字以上で、かつ不要なキーワードでなければ採用
-            if (mb_strlen($name) >= 2 && !preg_match('/(合計|小計)/u', $name)) {
+            // 住所の一部（数字やハイフン）が混じっている場合は除外
+            if (mb_strlen($name) >= 2 && !preg_match('/^[0-9\-]+$/', $name)) {
                 $items[] = ['name' => $name, 'price' => $price];
             }
             $currentName = ""; 
         } else {
-            // 文字列行を蓄積
-            if (!preg_match('/^[¥\*・\s]+$/', $text) && !is_numeric($text)) {
+            // 文字列行を蓄積（商品名になりそうなものだけ）
+            // 数字だけの行や、短すぎる記号は無視
+            if (!preg_match('/^[¥\*・\s0-9\-]+$/', $text) && mb_strlen($text) > 1) {
                 $currentName .= $text;
             }
         }
@@ -170,3 +170,4 @@ function parseFamilyMartReceipt($ocrResult) {
     </div>
 </body>
 </html>
+
