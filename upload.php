@@ -83,26 +83,38 @@ function parseFamilyMartReceipt($ocrResult) {
     $lines = $ocrResult['analyzeResult']['readResults'][0]['lines'];
     
     $currentName = ""; 
+    $findTotalNext = false; // 「合計」の次の行に数字があるか監視するフラグ
+
     foreach ($lines as $line) {
         $text = trim($line['text']);
 
-        // 1. 合計金額の抽出（判定を強化）
-        // 「合計」の間にスペースが入っていても、後ろに数字があっても反応するように
+        // --- A. 合計金額の抽出 (超執念Ver) ---
+        // 1. 「合計」という文字自体が含まれているか
         if (preg_match('/合\s*計/u', $text)) {
-            // 同じ行にある数字（￥記号付きでもOK）を抽出
-            if (preg_match('/[¥＊\*]*\s*([0-9,]{2,})/', $text, $m)) {
+            // 同じ行に数字があればそれを合計にする
+            if (preg_match('/([0-9,]{2,})/', $text, $m)) {
                 $total = (int)str_replace(',', '', $m[1]);
-                continue; 
+            } else {
+                // 同じ行になければ「次の行に数字があるはず」とフラグを立てる
+                $findTotalNext = true;
             }
+            continue; 
         }
 
-        // 2. ゴミ排除リスト（住所や支払い情報は商品名にしない）
+        // 2. 「合計」のすぐ後に現れた数字を合計として捕まえる
+        if ($findTotalNext && preg_match('/^[¥＊\*]*\s*([0-9,]{2,})$/', $text, $m)) {
+            $total = (int)str_replace(',', '', $m[1]);
+            $findTotalNext = false; // 捕まえたらフラグを下ろす
+            continue;
+        }
+
+        // --- B. ゴミ排除リスト ---
         if (preg_match('/(東京都|新宿区|北新宿|FamilyMart|年|月|日|:[0-9]{2}|領収|店|責No|番号|レジ|電話|T[0-9]{10}|お買上|証|マネー|支払|残高|クレジット|現金|お釣り|対象|消費税|thefamhay)/ui', $text)) {
             $currentName = ""; 
             continue;
         }
 
-        // 3. 商品名と価格の検知
+        // --- C. 商品名と価格の検知 ---
         if (preg_match('/([*¥＊])\s*([0-9,]+)/u', $text, $m)) {
             $price = (int)str_replace(',', '', $m[2]);
             $parts = explode($m[1], $text);
@@ -121,6 +133,18 @@ function parseFamilyMartReceipt($ocrResult) {
             $currentName .= $text;
         }
     }
+    
+    // 【最終手段】もし「合計」が見つからなかったら、商品の単価ではない「一番下の大きな数字」を合計にする
+    if ($total == 0 && !empty($items)) {
+        // OCR結果を逆から辿って、最初に見つけた3桁以上の数字を拾う（保険）
+        for ($i = count($lines) - 1; $i >= 0; $i--) {
+            if (preg_match('/([0-9,]{3,})/', $lines[$i]['text'], $m)) {
+                $total = (int)str_replace(',', '', $m[1]);
+                break;
+            }
+        }
+    }
+
     return ['items' => $items, 'total' => $total];
 }
 ?>
@@ -168,3 +192,4 @@ function parseFamilyMartReceipt($ocrResult) {
     </div>
 </body>
 </html>
+
