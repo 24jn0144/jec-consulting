@@ -87,37 +87,36 @@ function parseFamilyMartReceipt($ocrResult) {
     foreach ($lines as $line) {
         $text = trim($line['text']);
 
-        // 1. 強力なゴミ排除（これらが含まれる行は「商品名」として蓄積しない）
-        if (preg_match('/(東京都|新宿区|北新宿|FamilyMart|年|月|日|:[0-9]{2}|領収|店|責No|番号|レジ|電話|T[0-9]{10}|お買上|証|マネー|支払|残高|クレジット|現金|お釣り|対象|消費税|thefamhay)/ui', $text)) {
-            $currentName = ""; // ゴミが出たら、それまで溜めてた文字列もリセット
-            continue;
-        }
-
-        // 2. 合計金額の抽出
+        // 1. 合計金額の抽出（最優先！）
+        // 「合計」という文字が含まれていたら、その行の数字を抜く
         if (mb_strpos($text, '合計') !== false || mb_strpos($text, '合 計') !== false) {
-            if (preg_match('/([0-9,]{3,})/', $text, $m)) { // 3桁以上の数字を合計とみなす
+            if (preg_match('/([0-9,]{2,})/', $text, $m)) {
                 $total = (int)str_replace(',', '', $m[1]);
             }
             continue;
         }
 
+        // 2. ゴミ排除リスト（商品名として絶対に使わない行）
+        if (preg_match('/(東京都|新宿区|北新宿|FamilyMart|年|月|日|:[0-9]{2}|領収|店|責No|番号|レジ|電話|T[0-9]{10}|お買上|証|マネー|支払|残高|クレジット|現金|お釣り|対象|消費税|thefamhay)/ui', $text)) {
+            $currentName = ""; 
+            continue;
+        }
+
         // 3. 商品名と価格の検知
-        // 「¥」や「*」がある行を価格行とする
         if (preg_match('/[\*¥]\s*([0-9,]+)/', $text, $m)) {
             $price = (int)str_replace(',', '', $m[1]);
             
-            // 商品名の最終クレンジング
+            // 商品名の掃除
             $name = str_replace(['(軽)', '軽', '*', '¥', '＊', '(', ')', '（', '）'], '', $currentName);
             $name = trim($name);
 
-            // 住所の一部（数字やハイフン）が混じっている場合は除外
+            // 住所の一部（数字やハイフン）でないことを確認
             if (mb_strlen($name) >= 2 && !preg_match('/^[0-9\-]+$/', $name)) {
                 $items[] = ['name' => $name, 'price' => $price];
             }
             $currentName = ""; 
         } else {
-            // 文字列行を蓄積（商品名になりそうなものだけ）
-            // 数字だけの行や、短すぎる記号は無視
+            // 文字列を蓄積（数字だけ、記号だけの行は避ける）
             if (!preg_match('/^[¥\*・\s0-9\-]+$/', $text) && mb_strlen($text) > 1) {
                 $currentName .= $text;
             }
@@ -170,4 +169,5 @@ function parseFamilyMartReceipt($ocrResult) {
     </div>
 </body>
 </html>
+
 
