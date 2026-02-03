@@ -144,19 +144,18 @@ function parseFamilyMartReceipt($ocrResult) {
                     <div class="card-header bg-success text-white">ファイル: <?php echo htmlspecialchars($filename); ?></div>
                     <div class="card-body">
                         <p class="lead">
-                            <?php 
-                            $formatted = [];
-                            if (!empty($data['items'])) {
-                                foreach ($data['items'] as $item) {
-                                    $formatted[] = htmlspecialchars($item['name']) . "　¥" . number_format($item['price']);
-                                }
-                            }
-                            if (isset($data['total']) && $data['total'] > 0) {
-                                $formatted[] = "合計　¥" . number_format($data['total']);
-                            }
-                            echo !empty($formatted) ? implode(", ", $formatted) : "データを抽出できませんでした。"; 
-                            ?>
-                        </p>
+    <?php 
+    $formatted = [];
+    foreach ($data['items'] as $item) {
+        $formatted[] = htmlspecialchars($item['name']) . "　¥" . number_format($item['price']);
+    }
+    // ここで「合計」を連結！
+    if (isset($data['total']) && $data['total'] > 0) {
+        $formatted[] = "合計　¥" . number_format($data['total']);
+    }
+    echo implode(", ", $formatted); 
+    ?>
+</p>
                     </div>
                 </div>
             <?php endforeach; ?>
@@ -169,5 +168,6 @@ function parseFamilyMartReceipt($ocrResult) {
     </div>
 </body>
 </html>
+
 
 
