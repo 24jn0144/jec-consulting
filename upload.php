@@ -9,6 +9,7 @@ error_reporting(E_ALL);
 
 $endpointUrl = rtrim($endpoint, '/') . '/vision/v3.2/read/analyze';
 
+// データベース接続
 $db = new SQLite3('receipts.db');
 $db->exec("CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY AUTOINCREMENT, filename TEXT, item_name TEXT, price INTEGER, is_total INTEGER, created_at DATETIME)");
 
@@ -32,7 +33,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['receipts'])) {
 
             $parsedData = parseFamilyMartReceipt($ocrText);
             
-            // 商品の保存
             foreach ($parsedData['items'] as $item) {
                 $stmt = $db->prepare('INSERT INTO items (filename, item_name, price, is_total, created_at) VALUES (:fname, :iname, :price, 0, datetime("now"))');
                 $stmt->bindValue(':fname', $originalName); $stmt->bindValue(':iname', $item['name']); $stmt->bindValue(':price', $item['price']);
@@ -41,7 +41,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['receipts'])) {
                 $csvData[] = [$originalName, $item['name'], $item['price']];
             }
 
-            // 合計の保存
             if ($parsedData['total'] > 0) {
                 $stmt = $db->prepare('INSERT INTO items (filename, item_name, price, is_total, created_at) VALUES (:fname, :iname, :price, 1, datetime("now"))');
                 $stmt->bindValue(':fname', $originalName); $stmt->bindValue(':iname', '合計'); $stmt->bindValue(':price', $parsedData['total']);
@@ -88,29 +87,31 @@ function parseFamilyMartReceipt($ocrResult) {
     foreach ($lines as $line) {
         $text = trim($line['text']);
 
-        // --- A. 合計金額の抽出（これを見つけたら即座に金額を確定） ---
+        // 1. 合計金額の抽出（最優先：合計の文字がある行から数字を抜く）
         if (preg_match('/合計/u', $text)) {
-            // 同じ行、または「合計」という文字そのものに数字が含まれているか確認
             if (preg_match('/([0-9,]{2,})/', $text, $m)) {
                 $total = (int)str_replace(',', '', $m[1]);
-            } else {
-                // 文字列に数字がない場合、次の数行から数字を探す（保険策）
-                // ただし今回はシンプルにこの行で決める
             }
             continue; 
         }
 
-        // --- B. ゴミ排除リスト ---
+        // 2. ゴミ排除リスト
         if (preg_match('/(東京都|新宿区|北新宿|FamilyMart|年|月|日|:[0-9]{2}|領収|店|責No|番号|レジ|電話|T[0-9]{10}|お買上|証|マネー|支払|残高|クレジット|現金|お釣り|対象|消費税|thefamhay)/ui', $text)) {
             $currentName = ""; 
             continue;
         }
 
-        // --- C. 商品名と価格の抽出 ---
-        // ¥ または * がついている行を価格と判定
-        if (preg_match('/[¥\*]\s*([0-9,]+)/u', $text, $m)) {
-            $price = (int)str_replace(',', '', $m[1]);
-            $name = str_replace(['(軽)', '軽', '*', '¥', '＊', '(', ')', '（', '）'], '', $currentName);
+        // 3. 商品名と価格の検知
+        // 「*」や「¥」が含まれる行
+        if (preg_match('/([*¥＊])\s*([0-9,]+)/u', $text, $m)) {
+            $price = (int)str_replace(',', '', $m[2]);
+
+            // 「*」などの記号より前にある文字も商品名として結合（600ml対策）
+            $parts = explode($m[1], $text);
+            $extraName = trim($parts[0]);
+            $fullName = $currentName . $extraName;
+
+            $name = str_replace(['(軽)', '軽', '*', '¥', '＊', '(', ')', '（', '）'], '', $fullName);
             $name = trim($name);
 
             if (mb_strlen($name) >= 2 && !preg_match('/^[0-9\-]+$/', $name)) {
@@ -118,13 +119,11 @@ function parseFamilyMartReceipt($ocrResult) {
             }
             $currentName = ""; 
         } 
-        // 価格のない行は商品名の一部として蓄積
+        // 価格がない行は商品名の一部として蓄積
         elseif (!preg_match('/^[¥\*・\s0-9\-]+$/', $text) && mb_strlen($text) > 1) {
             $currentName .= $text;
         }
     }
-
-    // もし合計が0のままなら、一番大きい金額（または最後の支払額）を探すロジックが必要だが、まずはこれで。
     return ['items' => $items, 'total' => $total];
 }
 ?>
@@ -146,7 +145,7 @@ function parseFamilyMartReceipt($ocrResult) {
                 <div class="card mb-4 shadow-sm">
                     <div class="card-header bg-success text-white">ファイル: <?php echo htmlspecialchars($filename); ?></div>
                     <div class="card-body">
-                        <p class="lead" style="font-weight: bold;">
+                        <p class="lead">
                             <?php 
                             $formatted = [];
                             if (!empty($data['items'])) {
@@ -154,7 +153,6 @@ function parseFamilyMartReceipt($ocrResult) {
                                     $formatted[] = htmlspecialchars($item['name']) . "　¥" . number_format($item['price']);
                                 }
                             }
-                            // 合計を最後に追加
                             if (isset($data['total']) && $data['total'] > 0) {
                                 $formatted[] = "合計　¥" . number_format($data['total']);
                             }
