@@ -9,6 +9,7 @@ error_reporting(E_ALL);
 
 $endpointUrl = rtrim($endpoint, '/') . '/vision/v3.2/read/analyze';
 
+// データベース接続
 $db = new SQLite3('receipts.db');
 $db->exec("CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY AUTOINCREMENT, filename TEXT, item_name TEXT, price INTEGER, is_total INTEGER, created_at DATETIME)");
 
@@ -27,13 +28,16 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['receipts'])) {
             $originalName = $files['name'][$i];
             $imageData = file_get_contents($tmpName);
 
+            // 1. Azure AI Vision APIを呼び出す
             $ocrText = callAzureOCR($endpointUrl, $apiKey, $imageData);
             
             $logContent .= "--- FILE: $originalName ---\n";
             $logContent .= print_r($ocrText, true) . "\n\n";
 
+            // 2. 解析処理（最強版ロジック）
             $parsedData = parseFamilyMartReceipt($ocrText);
             
+            // 3. データベース保存と結果格納
             foreach ($parsedData['items'] as $item) {
                 $stmt = $db->prepare('INSERT INTO items (filename, item_name, price, is_total, created_at) VALUES (:fname, :iname, :price, 0, datetime("now"))');
                 $stmt->bindValue(':fname', $originalName);
@@ -41,7 +45,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['receipts'])) {
                 $stmt->bindValue(':price', $item['price']);
                 $stmt->execute();
 
-                $results[$originalName][] = $item;
+                $results[$originalName]['items'][] = $item;
                 $csvData[] = [$originalName, $item['name'], $item['price']];
             }
 
@@ -52,17 +56,20 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['receipts'])) {
                 $stmt->bindValue(':price', $parsedData['total']);
                 $stmt->execute();
 
-                $results[$originalName][] = ['name' => '合計', 'price' => $parsedData['total'], 'is_total' => true];
+                $results[$originalName]['total'] = $parsedData['total'];
                 $csvData[] = [$originalName, '合計', $parsedData['total']];
             }
         }
     }
+    // ログとCSVの保存
     file_put_contents('ocr.log', $logContent, FILE_APPEND);
     $fp = fopen('output.csv', 'w');
     fwrite($fp, "\xEF\xBB\xBF");
     foreach ($csvData as $fields) { fputcsv($fp, $fields); }
     fclose($fp);
 }
+
+// --- 関数定義 ---
 
 function callAzureOCR($url, $key, $imageData) {
     $ch = curl_init();
@@ -95,22 +102,40 @@ function parseFamilyMartReceipt($ocrResult) {
     $items = []; $total = 0;
     if (!isset($ocrResult['analyzeResult']['readResults'][0]['lines'])) return ['items' => [], 'total' => 0];
     $lines = $ocrResult['analyzeResult']['readResults'][0]['lines'];
+    
+    $currentName = ""; 
     foreach ($lines as $line) {
-        $text = $line['text'];
-        $cleanText = str_replace(['軽', '*', '＊', '(', ')', '（', '）'], '', $text);
-        $cleanText = trim($cleanText);
-        if (preg_match('/合計/u', $cleanText)) {
-            if (preg_match('/([0-9,]+)/', $cleanText, $matches)) {
-                $total = (int)str_replace(',', '', $matches[1]);
+        $text = trim($line['text']);
+
+        // 除外：住所・店名・責No・日時・電話番号など
+        if (preg_match('/(東京都|新宿区|北新宿|店|責No|番号|日時|レジ|電話|T81|領収|お買上|証|再発行|キャッシュ|お釣り|対象)/u', $text)) {
+            continue;
+        }
+
+        // 合計金額の抽出
+        if (mb_strpos($text, '合計') !== false || mb_strpos($text, '合 計') !== false) {
+            if (preg_match('/(\d[\d,]*)/', $text, $m)) {
+                $total = (int)str_replace(',', '', $m[1]);
             }
             continue;
         }
-        if (preg_match('/(電話|登録番号|日時|レジ|領収証|対象|支払|残高|お釣り|ファミ|クーポン|％|個)/u', $cleanText)) continue;
-        if (preg_match('/^(.+?)\s*¥?([0-9,]+)$/u', $cleanText, $matches)) {
-            $name = trim($matches[1]);
-            $price = (int)str_replace(',', '', $matches[2]);
-            if (is_numeric($name) || mb_strlen($name) <= 1) continue;
-            $items[] = ['name' => $name, 'price' => $price];
+
+        // 価格行の検知（* ¥ 軽 が含まれるか）
+        if (preg_match('/[\*¥]\s*(\d+)/', $text, $m) || preg_match('/(\d+)\s*(?:軽|\(軽\))/', $text, $m)) {
+            $price = (int)$m[1];
+            // 商品名の掃除：記号や「軽」を完全に消す
+            $name = str_replace(['(軽)', '軽', '*', '¥', '＊', '(', ')', '（', '）'], '', $currentName);
+            $name = trim($name);
+
+            if (mb_strlen($name) >= 2) {
+                $items[] = ['name' => $name, 'price' => $price];
+            }
+            $currentName = ""; 
+        } else {
+            // 文字列行を蓄積（商品名が複数行に分かれる場合への対応）
+            if (!preg_match('/^[¥\*・\s]+$/', $text) && !is_numeric($text)) {
+                $currentName .= $text;
+            }
         }
     }
     return ['items' => $items, 'total' => $total];
@@ -130,16 +155,22 @@ function parseFamilyMartReceipt($ocrResult) {
         <?php if (empty($results)): ?>
             <div class="alert alert-warning">解析データがありません。もう一度アップロードしてください。</div>
         <?php else: ?>
-            <?php foreach ($results as $filename => $fileItems): ?>
+            <?php foreach ($results as $filename => $data): ?>
                 <div class="card mb-4 shadow-sm">
                     <div class="card-header bg-success text-white">ファイル: <?php echo htmlspecialchars($filename); ?></div>
                     <div class="card-body">
                         <p class="lead">
                             <?php 
                             $formatted = [];
-                            foreach ($fileItems as $item) {
+                            // 商品リストの作成
+                            foreach ($data['items'] as $item) {
                                 $formatted[] = htmlspecialchars($item['name']) . "　¥" . number_format($item['price']);
                             }
+                            // 合計の追加
+                            if (isset($data['total']) && $data['total'] > 0) {
+                                $formatted[] = "合計　¥" . number_format($data['total']);
+                            }
+                            // カンマ区切りで一括表示
                             echo implode(", ", $formatted); 
                             ?>
                         </p>
