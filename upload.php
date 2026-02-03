@@ -9,7 +9,6 @@ error_reporting(E_ALL);
 
 $endpointUrl = rtrim($endpoint, '/') . '/vision/v3.2/read/analyze';
 
-// データベース接続
 $db = new SQLite3('receipts.db');
 $db->exec("CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY AUTOINCREMENT, filename TEXT, item_name TEXT, price INTEGER, is_total INTEGER, created_at DATETIME)");
 
@@ -87,26 +86,25 @@ function parseFamilyMartReceipt($ocrResult) {
     foreach ($lines as $line) {
         $text = trim($line['text']);
 
-        // 1. 合計金額の抽出（最優先：合計の文字がある行から数字を抜く）
-        if (preg_match('/合計/u', $text)) {
-            if (preg_match('/([0-9,]{2,})/', $text, $m)) {
+        // 1. 合計金額の抽出（判定を強化）
+        // 「合計」の間にスペースが入っていても、後ろに数字があっても反応するように
+        if (preg_match('/合\s*計/u', $text)) {
+            // 同じ行にある数字（￥記号付きでもOK）を抽出
+            if (preg_match('/[¥＊\*]*\s*([0-9,]{2,})/', $text, $m)) {
                 $total = (int)str_replace(',', '', $m[1]);
+                continue; 
             }
-            continue; 
         }
 
-        // 2. ゴミ排除リスト
+        // 2. ゴミ排除リスト（住所や支払い情報は商品名にしない）
         if (preg_match('/(東京都|新宿区|北新宿|FamilyMart|年|月|日|:[0-9]{2}|領収|店|責No|番号|レジ|電話|T[0-9]{10}|お買上|証|マネー|支払|残高|クレジット|現金|お釣り|対象|消費税|thefamhay)/ui', $text)) {
             $currentName = ""; 
             continue;
         }
 
         // 3. 商品名と価格の検知
-        // 「*」や「¥」が含まれる行
         if (preg_match('/([*¥＊])\s*([0-9,]+)/u', $text, $m)) {
             $price = (int)str_replace(',', '', $m[2]);
-
-            // 「*」などの記号より前にある文字も商品名として結合（600ml対策）
             $parts = explode($m[1], $text);
             $extraName = trim($parts[0]);
             $fullName = $currentName . $extraName;
@@ -119,7 +117,6 @@ function parseFamilyMartReceipt($ocrResult) {
             }
             $currentName = ""; 
         } 
-        // 価格がない行は商品名の一部として蓄積
         elseif (!preg_match('/^[¥\*・\s0-9\-]+$/', $text) && mb_strlen($text) > 1) {
             $currentName .= $text;
         }
