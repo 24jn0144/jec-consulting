@@ -83,38 +83,45 @@ function parseFamilyMartReceipt($ocrResult) {
     $lines = $ocrResult['analyzeResult']['readResults'][0]['lines'];
     
     $currentName = ""; 
-    $findTotalNext = false; // 「合計」の次の行に数字があるか監視するフラグ
+    $totalFound = false;
 
     foreach ($lines as $line) {
         $text = trim($line['text']);
 
-        // --- A. 合計金額の抽出 (超執念Ver) ---
-        // 1. 「合計」という文字自体が含まれているか
+        // 1. 「お預り」「お釣り」「再発行」など、合計以降のキーワードが出たら解析終了
+        if (preg_match('/(お預|お釣|釣り|クレジット|再発行|点数)/u', $text)) {
+            break; 
+        }
+
+        // 2. 「合計」行の判定（ゆらぎ対応）
         if (preg_match('/合\s*計/u', $text)) {
-            // 同じ行に数字があればそれを合計にする
+            // 同じ行に数字があれば抽出
             if (preg_match('/([0-9,]{2,})/', $text, $m)) {
                 $total = (int)str_replace(',', '', $m[1]);
-            } else {
-                // 同じ行になければ「次の行に数字があるはず」とフラグを立てる
-                $findTotalNext = true;
+                $totalFound = true;
             }
+            // まだ数字が見つかっていない場合、次のループで数字を探す
             continue; 
         }
 
-        // 2. 「合計」のすぐ後に現れた数字を合計として捕まえる
-        if ($findTotalNext && preg_match('/^[¥＊\*]*\s*([0-9,]{2,})$/', $text, $m)) {
-            $total = (int)str_replace(',', '', $m[1]);
-            $findTotalNext = false; // 捕まえたらフラグを下ろす
-            continue;
+        // 3. 「合計」の文字が見つかった直後の数字行を拾う
+        if (!$totalFound && $total == 0) {
+            // 「合計」の文字は既に出ているが、まだ金額が入っていない場合
+            // 記号（¥ * ＊）から始まる数字、あるいは純粋な数字行を合計とみなす
+            if (preg_match('/^[¥＊\*]*\s*([0-9,]{2,})$/', $text, $m)) {
+                $total = (int)str_replace(',', '', $m[1]);
+                $totalFound = true;
+                continue;
+            }
         }
 
-        // --- B. ゴミ排除リスト ---
-        if (preg_match('/(東京都|新宿区|北新宿|FamilyMart|年|月|日|:[0-9]{2}|領収|店|責No|番号|レジ|電話|T[0-9]{10}|お買上|証|マネー|支払|残高|クレジット|現金|お釣り|対象|消費税|thefamhay)/ui', $text)) {
+        // 4. ゴミ排除リスト
+        if (preg_match('/(東京都|新宿区|北新宿|FamilyMart|年|月|日|:[0-9]{2}|領収|店|責No|番号|レジ|電話|T[0-9]{10}|お買上|証|マネー|支払|残高|対象|消費税|thefamhay)/ui', $text)) {
             $currentName = ""; 
             continue;
         }
 
-        // --- C. 商品名と価格の検知 ---
+        // 5. 商品名と価格の検知
         if (preg_match('/([*¥＊])\s*([0-9,]+)/u', $text, $m)) {
             $price = (int)str_replace(',', '', $m[2]);
             $parts = explode($m[1], $text);
@@ -134,17 +141,6 @@ function parseFamilyMartReceipt($ocrResult) {
         }
     }
     
-    // 【最終手段】もし「合計」が見つからなかったら、商品の単価ではない「一番下の大きな数字」を合計にする
-    if ($total == 0 && !empty($items)) {
-        // OCR結果を逆から辿って、最初に見つけた3桁以上の数字を拾う（保険）
-        for ($i = count($lines) - 1; $i >= 0; $i--) {
-            if (preg_match('/([0-9,]{3,})/', $lines[$i]['text'], $m)) {
-                $total = (int)str_replace(',', '', $m[1]);
-                break;
-            }
-        }
-    }
-
     return ['items' => $items, 'total' => $total];
 }
 ?>
@@ -192,4 +188,5 @@ function parseFamilyMartReceipt($ocrResult) {
     </div>
 </body>
 </html>
+
 
