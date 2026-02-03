@@ -28,57 +28,39 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_FILES['receipts'])) {
             $originalName = $files['name'][$i];
             $imageData = file_get_contents($tmpName);
 
-            // 1. Azure AI Vision APIを呼び出す
             $ocrText = callAzureOCR($endpointUrl, $apiKey, $imageData);
-            
-            $logContent .= "--- FILE: $originalName ---\n";
-            $logContent .= print_r($ocrText, true) . "\n\n";
+            $logContent .= "--- FILE: $originalName ---\n" . print_r($ocrText, true) . "\n\n";
 
-            // 2. 解析処理（最強版ロジック）
             $parsedData = parseFamilyMartReceipt($ocrText);
             
-            // 3. データベース保存と結果格納
             foreach ($parsedData['items'] as $item) {
                 $stmt = $db->prepare('INSERT INTO items (filename, item_name, price, is_total, created_at) VALUES (:fname, :iname, :price, 0, datetime("now"))');
-                $stmt->bindValue(':fname', $originalName);
-                $stmt->bindValue(':iname', $item['name']);
-                $stmt->bindValue(':price', $item['price']);
+                $stmt->bindValue(':fname', $originalName); $stmt->bindValue(':iname', $item['name']); $stmt->bindValue(':price', $item['price']);
                 $stmt->execute();
-
                 $results[$originalName]['items'][] = $item;
                 $csvData[] = [$originalName, $item['name'], $item['price']];
             }
 
             if ($parsedData['total'] > 0) {
                 $stmt = $db->prepare('INSERT INTO items (filename, item_name, price, is_total, created_at) VALUES (:fname, :iname, :price, 1, datetime("now"))');
-                $stmt->bindValue(':fname', $originalName);
-                $stmt->bindValue(':iname', '合計');
-                $stmt->bindValue(':price', $parsedData['total']);
+                $stmt->bindValue(':fname', $originalName); $stmt->bindValue(':iname', '合計'); $stmt->bindValue(':price', $parsedData['total']);
                 $stmt->execute();
-
                 $results[$originalName]['total'] = $parsedData['total'];
                 $csvData[] = [$originalName, '合計', $parsedData['total']];
             }
         }
     }
-    // ログとCSVの保存
     file_put_contents('ocr.log', $logContent, FILE_APPEND);
-    $fp = fopen('output.csv', 'w');
-    fwrite($fp, "\xEF\xBB\xBF");
+    $fp = fopen('output.csv', 'w'); fwrite($fp, "\xEF\xBB\xBF");
     foreach ($csvData as $fields) { fputcsv($fp, $fields); }
     fclose($fp);
 }
 
-// --- 関数定義 ---
-
 function callAzureOCR($url, $key, $imageData) {
     $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_URL, $url); curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/octet-stream', 'Ocp-Apim-Subscription-Key: ' . $key]);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $imageData);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_HEADER, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $imageData); curl_setopt($ch, CURLOPT_RETURNTRANSFER, true); curl_setopt($ch, CURLOPT_HEADER, true);
     $response = curl_exec($ch);
     $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
     $header = substr($response, 0, $headerSize);
@@ -87,12 +69,10 @@ function callAzureOCR($url, $key, $imageData) {
     $operationUrl = trim($matches[1]);
     for ($i = 0; $i < 15; $i++) {
         sleep(1);
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $operationUrl);
+        $ch = curl_init(); curl_setopt($ch, CURLOPT_URL, $operationUrl);
         curl_setopt($ch, CURLOPT_HTTPHEADER, ['Ocp-Apim-Subscription-Key: ' . $key]);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        $res = json_decode(curl_exec($ch), true);
-        curl_close($ch);
+        $res = json_decode(curl_exec($ch), true); curl_close($ch);
         if ($res['status'] === 'succeeded') return $res;
     }
     return $res;
@@ -107,32 +87,37 @@ function parseFamilyMartReceipt($ocrResult) {
     foreach ($lines as $line) {
         $text = trim($line['text']);
 
-        // 除外：住所・店名・責No・日時・電話番号など
-        if (preg_match('/(東京都|新宿区|北新宿|店|責No|番号|日時|レジ|電話|T81|領収|お買上|証|再発行|キャッシュ|お釣り|対象)/u', $text)) {
+        // --- 強力な除外リスト ---
+        // 店名、日時(2024年..)、領収、レジ、支払方法、残高、住所、電話番号、英字ゴミを排除
+        if (preg_match('/(FamilyMart|年|月|日|:[0-9]{2}|領収|店|責No|番号|レジ|電話|T[0-9]{10}|お買上|証|マネー|支払|残高|クレジット|現金|お釣り|対象|消費税|thefamhay)/ui', $text)) {
             continue;
         }
 
-        // 合計金額の抽出
+        // --- 合計金額の抽出 ---
+        // 「合計」という文字が含まれる行から数字を抜く
         if (mb_strpos($text, '合計') !== false || mb_strpos($text, '合 計') !== false) {
-            if (preg_match('/(\d[\d,]*)/', $text, $m)) {
+            if (preg_match('/([0-9,]+)/', $text, $m)) {
                 $total = (int)str_replace(',', '', $m[1]);
             }
             continue;
         }
 
-        // 価格行の検知（* ¥ 軽 が含まれるか）
-        if (preg_match('/[\*¥]\s*(\d+)/', $text, $m) || preg_match('/(\d+)\s*(?:軽|\(軽\))/', $text, $m)) {
-            $price = (int)$m[1];
-            // 商品名の掃除：記号や「軽」を完全に消す
+        // --- 商品名と価格の検知 ---
+        // 「¥」や「*」がある、または行末が数字（価格）のパターン
+        if (preg_match('/[\*¥]\s*([0-9,]+)/', $text, $m) || preg_match('/\s+([0-9,]+)$/', $text, $m)) {
+            $price = (int)str_replace(',', '', $m[1]);
+            
+            // 商品名のクレンジング
             $name = str_replace(['(軽)', '軽', '*', '¥', '＊', '(', ')', '（', '）'], '', $currentName);
             $name = trim($name);
 
-            if (mb_strlen($name) >= 2) {
+            // 商品名が2文字以上で、かつ不要なキーワードでなければ採用
+            if (mb_strlen($name) >= 2 && !preg_match('/(合計|小計)/u', $name)) {
                 $items[] = ['name' => $name, 'price' => $price];
             }
             $currentName = ""; 
         } else {
-            // 文字列行を蓄積（商品名が複数行に分かれる場合への対応）
+            // 文字列行を蓄積
             if (!preg_match('/^[¥\*・\s]+$/', $text) && !is_numeric($text)) {
                 $currentName .= $text;
             }
@@ -162,16 +147,15 @@ function parseFamilyMartReceipt($ocrResult) {
                         <p class="lead">
                             <?php 
                             $formatted = [];
-                            // 商品リストの作成
-                            foreach ($data['items'] as $item) {
-                                $formatted[] = htmlspecialchars($item['name']) . "　¥" . number_format($item['price']);
+                            if (!empty($data['items'])) {
+                                foreach ($data['items'] as $item) {
+                                    $formatted[] = htmlspecialchars($item['name']) . "　¥" . number_format($item['price']);
+                                }
                             }
-                            // 合計の追加
                             if (isset($data['total']) && $data['total'] > 0) {
                                 $formatted[] = "合計　¥" . number_format($data['total']);
                             }
-                            // カンマ区切りで一括表示
-                            echo implode(", ", $formatted); 
+                            echo !empty($formatted) ? implode(", ", $formatted) : "データを抽出できませんでした。"; 
                             ?>
                         </p>
                     </div>
